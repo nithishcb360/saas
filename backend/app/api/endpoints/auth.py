@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from datetime import datetime, timedelta
 from app.schemas.auth import (
     UserRegister,
     UserLogin,
@@ -13,10 +14,17 @@ from app.core.security import (
     verify_password,
     get_password_hash,
     create_access_token,
-    create_refresh_token
+    create_refresh_token,
+    generate_reset_token
 )
 from app.core.database import get_db
 from app.models.user import User
+from app.core.email import (
+    send_email,
+    generate_password_reset_email,
+    generate_password_reset_success_email
+)
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -126,22 +134,99 @@ async def logout():
     return {"message": "Successfully logged out"}
 
 @router.post("/forgot-password")
-async def forgot_password(data: PasswordReset):
+async def forgot_password(data: PasswordReset, db: AsyncSession = Depends(get_db)):
     """
-    Send password reset email.
+    Send password reset email to the user.
     """
-    # TODO: Implement password reset logic
-    # - Generate reset token
-    # - Send email with reset link
-    return {"message": "Password reset email sent"}
+    # Find user by email
+    result = await db.execute(
+        select(User).where(User.email == data.email)
+    )
+    user = result.scalar_one_or_none()
+
+    # Always return success message to prevent email enumeration attacks
+    success_message = {
+        "message": "If an account exists with this email, a password reset link has been sent."
+    }
+
+    if not user:
+        # Don't reveal that the user doesn't exist
+        return success_message
+
+    # Generate reset token
+    reset_token = generate_reset_token()
+    reset_token_expires = datetime.utcnow() + timedelta(hours=1)
+
+    # Update user with reset token
+    user.reset_token = reset_token
+    user.reset_token_expires = reset_token_expires
+    await db.commit()
+
+    # Generate reset link
+    reset_link = f"{settings.FRONTEND_URL}/reset-password?token={reset_token}"
+
+    # Generate email content
+    html_content = generate_password_reset_email(
+        reset_link=reset_link,
+        user_name=user.full_name
+    )
+
+    # Send email
+    email_sent = await send_email(
+        email_to=user.email,
+        subject=f"Password Reset Request - {settings.APP_NAME}",
+        html_content=html_content
+    )
+
+    if not email_sent:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send password reset email. Please contact support."
+        )
+
+    return success_message
 
 @router.post("/reset-password")
-async def reset_password(data: PasswordResetConfirm):
+async def reset_password(data: PasswordResetConfirm, db: AsyncSession = Depends(get_db)):
     """
-    Reset password using token.
+    Reset password using the token received via email.
     """
-    # TODO: Implement password reset confirmation
-    return {"message": "Password reset successful"}
+    # Find user by reset token
+    result = await db.execute(
+        select(User).where(User.reset_token == data.token)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token"
+        )
+
+    # Check if token has expired
+    if not user.reset_token_expires or user.reset_token_expires < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token has expired. Please request a new password reset."
+        )
+
+    # Update password
+    user.hashed_password = get_password_hash(data.new_password)
+    user.reset_token = None
+    user.reset_token_expires = None
+    user.updated_at = datetime.utcnow()
+
+    await db.commit()
+
+    # Send confirmation email
+    html_content = generate_password_reset_success_email(user.full_name)
+    await send_email(
+        email_to=user.email,
+        subject=f"Password Reset Successful - {settings.APP_NAME}",
+        html_content=html_content
+    )
+
+    return {"message": "Password reset successful. You can now login with your new password."}
 
 @router.post("/verify-email")
 async def verify_email(token: str):
