@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run dev:*)",
+      "Bash(mkdir:*)",
+      "Bash(powershell:*)",
+      "Bash(uvicorn:*)",
+      "Bash(pip install:*)",
+      "Bash(timeout 5 bash -c 'until curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; do sleep 0.5; done && echo \"\"Server is ready\"\"')",
+      "Bash(timeout:*)",
+      "Bash(curl -X POST \"http://127.0.0.1:8000/api/v1/auth/register\" -H \"Content-Type: application/json\" -d \"{\"\"email\"\":\"\"test@example.com\"\",\"\"full_name\"\":\"\"Test User\"\",\"\"password\"\":\"\"password123\"\"}\")",
+      "Bash(curl -X POST \"http://127.0.0.1:8000/api/v1/auth/login\" -H \"Content-Type: application/x-www-form-urlencoded\" -d \"username=test@example.com&password=password123\")",
+      "Bash(curl -X POST \"http://127.0.0.1:8000/api/v1/auth/login\" -H \"Content-Type: application/x-www-form-urlencoded\" -d \"username=test@example.com&password=wrongpassword\")",
+      "Bash(curl:*)",
+      "Bash(sqlite3:*)",
+      "Bash(taskkill:*)",
+      "Bash(pkill:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(npm install:*)",
+      "Bash(cat:*)",
+      "Bash(pnpm add:*)",
+      "Bash(alembic revision:*)",
+      "Bash(python:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
