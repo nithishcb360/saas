@@ -1,10 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from pathlib import Path
 from app.core.config import settings
 from app.core.database import init_db, close_db
 from app.api.api import api_router
+from app.core.upload import setup_upload_directories
 
 
 @asynccontextmanager
@@ -19,6 +22,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Could not initialize database: {e}")
         print("Running without database connection")
+
+    # Setup upload directories
+    setup_upload_directories()
+    print("Upload directories initialized")
+
     yield
     # Shutdown
     try:
@@ -41,7 +49,11 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL],
+    allow_origins=[
+        settings.FRONTEND_URL,
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,6 +61,11 @@ app.add_middleware(
 
 # Include API router
 app.include_router(api_router, prefix="/api/v1")
+
+# Mount static files for uploads
+uploads_path = Path("uploads")
+if uploads_path.exists():
+    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 @app.get("/")
 async def root():

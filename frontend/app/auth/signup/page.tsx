@@ -20,6 +20,20 @@ export default function SignupPage() {
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
+  const handleGoogleLogin = async () => {
+    try {
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api/v1'
+      const response = await fetch(`${API_BASE_URL}/auth/google/login`)
+      const data = await response.json()
+
+      // Redirect to Google OAuth page
+      window.location.href = data.auth_url
+    } catch (err) {
+      console.error('Google login error:', err)
+      setError("Failed to initiate Google login. Please try again.")
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
@@ -42,15 +56,36 @@ export default function SignupPage() {
       // Redirect to dashboard
       router.push("/dashboard")
     } catch (err: any) {
+      console.error('Signup error:', err)
+
       // Handle different error response formats
-      const errorDetail = err.response?.data?.detail
-      if (typeof errorDetail === 'string') {
-        setError(errorDetail)
-      } else if (Array.isArray(errorDetail)) {
-        setError(errorDetail.map((e: any) => e.msg).join(', '))
+      let errorMessage = "Registration failed. Please try again."
+
+      if (err.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        const errorDetail = err.response.data?.detail
+
+        if (typeof errorDetail === 'string') {
+          errorMessage = errorDetail
+        } else if (Array.isArray(errorDetail)) {
+          errorMessage = errorDetail.map((e: any) => e.msg || e.message || String(e)).join(', ')
+        } else if (err.response.data?.message) {
+          errorMessage = err.response.data.message
+        } else if (err.response.status === 400) {
+          errorMessage = "Email already registered or invalid data"
+        } else if (err.response.status === 422) {
+          errorMessage = "Please check all fields and try again"
+        }
+      } else if (err.request) {
+        // The request was made but no response was received
+        errorMessage = "Cannot connect to server. Please check your internet connection."
       } else {
-        setError("Registration failed. Please try again.")
+        // Something happened in setting up the request that triggered an Error
+        errorMessage = err.message || "An unexpected error occurred"
       }
+
+      setError(errorMessage)
     } finally {
       setLoading(false)
     }
@@ -158,7 +193,7 @@ export default function SignupPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <Button variant="outline" size="lg" type="button">
+                <Button variant="outline" size="lg" type="button" onClick={handleGoogleLogin}>
                   <svg className="h-5 w-5 mr-2" viewBox="0 0 24 24">
                     <path
                       fill="currentColor"

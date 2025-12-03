@@ -64,6 +64,17 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const displayName = user?.full_name || "Loading..."
   const userInitials = user?.full_name ? getInitials(user.full_name) : "U"
 
+  // Get profile picture URL
+  const getProfilePictureUrl = () => {
+    if (!user?.profile_picture) return null
+    if (user.profile_picture.startsWith('http')) return user.profile_picture
+    const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api/v1'
+    const baseUrl = API_BASE_URL.replace('/api/v1', '')
+    return `${baseUrl}${user.profile_picture}`
+  }
+
+  const profilePictureUrl = getProfilePictureUrl()
+
   return (
     <div className="min-h-screen bg-background">
       {/* Sidebar for desktop */}
@@ -121,7 +132,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="w-full justify-start gap-3 px-3">
                 <Avatar className="h-8 w-8">
-                  <AvatarImage src="/abstract-geometric-shapes.png" />
+                  <AvatarImage src={profilePictureUrl || undefined} />
                   <AvatarFallback>{userInitials}</AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col items-start text-sm">
@@ -164,7 +175,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon">
                 <Avatar className="h-8 w-8">
-                  <AvatarImage src="/abstract-geometric-shapes.png" />
+                  <AvatarImage src={profilePictureUrl || undefined} />
                   <AvatarFallback>{userInitials}</AvatarFallback>
                 </Avatar>
               </Button>

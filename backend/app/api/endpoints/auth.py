@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -25,6 +26,11 @@ from app.core.email import (
     generate_password_reset_success_email
 )
 from app.core.config import settings
+from app.core.google_oauth import (
+    get_google_oauth_url,
+    exchange_code_for_token,
+    verify_google_token
+)
 
 router = APIRouter()
 
@@ -243,3 +249,85 @@ async def resend_verification(email: str):
     """
     # TODO: Implement resend verification email
     return {"message": "Verification email sent"}
+
+@router.get("/google/login")
+async def google_login():
+    """
+    Redirect to Google OAuth login page.
+    """
+    auth_url = get_google_oauth_url()
+    return {"auth_url": auth_url}
+
+@router.get("/google/callback")
+async def google_callback(
+    code: str = Query(..., description="Authorization code from Google"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Handle Google OAuth callback and create/login user.
+    """
+    # Exchange code for ID token
+    id_token = await exchange_code_for_token(code)
+    if not id_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to obtain token from Google"
+        )
+
+    # Verify token and get user info
+    user_info = await verify_google_token(id_token)
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to verify Google token"
+        )
+
+    # Check if user exists by Google ID
+    result = await db.execute(
+        select(User).where(User.google_id == user_info["google_id"])
+    )
+    user = result.scalar_one_or_none()
+
+    # If no user by Google ID, check by email
+    if not user:
+        result = await db.execute(
+            select(User).where(User.email == user_info["email"])
+        )
+        user = result.scalar_one_or_none()
+
+        if user:
+            # User exists with this email but not linked to Google yet
+            # Link the Google account
+            user.google_id = user_info["google_id"]
+            user.oauth_provider = "google"
+            if not user.profile_picture and user_info.get("profile_picture"):
+                user.profile_picture = user_info["profile_picture"]
+            user.is_verified = True
+            await db.commit()
+        else:
+            # Create new user
+            user = User(
+                email=user_info["email"],
+                full_name=user_info["full_name"],
+                google_id=user_info["google_id"],
+                oauth_provider="google",
+                profile_picture=user_info.get("profile_picture"),
+                hashed_password=None,  # No password for OAuth users
+                is_active=True,
+                is_verified=True  # Google accounts are pre-verified
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+
+    # Update last login
+    user.last_login = datetime.utcnow()
+    await db.commit()
+
+    # Create tokens
+    access_token = create_access_token(data={"sub": user.email})
+    refresh_token = create_refresh_token(data={"sub": user.email})
+
+    # Redirect to frontend with tokens
+    frontend_redirect = f"{settings.FRONTEND_URL}/auth/callback?access_token={access_token}&refresh_token={refresh_token}"
+    return RedirectResponse(url=frontend_redirect)
