@@ -150,14 +150,12 @@ async def forgot_password(data: PasswordReset, db: AsyncSession = Depends(get_db
     )
     user = result.scalar_one_or_none()
 
-    # Always return success message to prevent email enumeration attacks
-    success_message = {
-        "message": "If an account exists with this email, a password reset link has been sent."
-    }
-
     if not user:
-        # Don't reveal that the user doesn't exist
-        return success_message
+        # Return error for unregistered email
+        raise HTTPException(
+            status_code=404,
+            detail="No account found with this email address. Please check your email or register for a new account."
+        )
 
     # Generate reset token
     reset_token = generate_reset_token()
@@ -169,7 +167,7 @@ async def forgot_password(data: PasswordReset, db: AsyncSession = Depends(get_db
     await db.commit()
 
     # Generate reset link
-    reset_link = f"{settings.FRONTEND_URL}/reset-password?token={reset_token}"
+    reset_link = f"{settings.FRONTEND_URL}/auth/reset-password?token={reset_token}"
 
     # Generate email content
     html_content = generate_password_reset_email(
@@ -177,7 +175,7 @@ async def forgot_password(data: PasswordReset, db: AsyncSession = Depends(get_db
         user_name=user.full_name
     )
 
-    # Send email
+    # Try to send email
     email_sent = await send_email(
         email_to=user.email,
         subject=f"Password Reset Request - {settings.APP_NAME}",
@@ -185,10 +183,24 @@ async def forgot_password(data: PasswordReset, db: AsyncSession = Depends(get_db
     )
 
     if not email_sent:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to send password reset email. Please contact support."
-        )
+        # In development, log the reset link instead of failing
+        if settings.ENVIRONMENT == "development":
+            print("\n" + "="*80)
+            print("PASSWORD RESET EMAIL (Development Mode)")
+            print("="*80)
+            print(f"To: {user.email}")
+            print(f"User: {user.full_name}")
+            print(f"\nReset Link:\n{reset_link}")
+            print("\nCopy this link and paste it in your browser to reset the password.")
+            print("="*80 + "\n")
+            # Return success even if email fails in dev mode
+            return success_message
+        else:
+            # In production, fail if email can't be sent
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send password reset email. Please contact support."
+            )
 
     return success_message
 

@@ -29,7 +29,9 @@
       "Bash(git remote add:*)",
       "Bash(git push:*)",
       "Bash(find:*)",
-      "Bash(tasklist)"
+      "Bash(tasklist)",
+      "Bash(psql:*)",
+      "Bash(copy:*)"
     ],
     "deny": [],
     "ask": []
