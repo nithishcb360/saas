@@ -33,6 +33,11 @@ from app.core.google_oauth import (
     exchange_code_for_token,
     verify_google_token
 )
+from app.core.github_oauth import (
+    get_github_oauth_url,
+    exchange_code_for_token as github_exchange_code,
+    get_github_user_info
+)
 
 router = APIRouter()
 
@@ -329,6 +334,96 @@ async def google_callback(
                 hashed_password=None,  # No password for OAuth users
                 is_active=True,
                 is_verified=True  # Google accounts are pre-verified
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+
+    # Update last login
+    user.last_login = datetime.utcnow()
+    await db.commit()
+
+    # Create tokens
+    access_token = create_access_token(data={"sub": user.email})
+    refresh_token = create_refresh_token(data={"sub": user.email})
+
+    # Redirect to frontend with tokens
+    frontend_redirect = f"{settings.FRONTEND_URL}/auth/callback?access_token={access_token}&refresh_token={refresh_token}"
+    return RedirectResponse(url=frontend_redirect)
+
+
+# GitHub OAuth Endpoints
+
+@router.get("/github")
+async def github_login():
+    """
+    Initiate GitHub OAuth flow.
+    """
+    auth_url = get_github_oauth_url()
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/github/callback")
+async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
+    """
+    Handle GitHub OAuth callback and create/login user.
+    """
+    # Exchange code for access token
+    token_data = await github_exchange_code(code)
+    access_token = token_data.get("access_token")
+
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to obtain access token from GitHub"
+        )
+
+    # Get user info from GitHub
+    user_info = await get_github_user_info(access_token)
+    if not user_info or not user_info.get("email"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to get user info from GitHub. Please ensure your GitHub email is verified."
+        )
+
+    github_id = user_info["id"]
+    email = user_info["email"]
+    full_name = user_info["name"]
+    profile_picture = user_info.get("avatar_url")
+
+    # Check if user exists by GitHub ID
+    result = await db.execute(
+        select(User).where(User.google_id == github_id)  # We'll reuse google_id field
+    )
+    user = result.scalar_one_or_none()
+
+    # If no user by GitHub ID, check by email
+    if not user:
+        result = await db.execute(
+            select(User).where(User.email == email)
+        )
+        user = result.scalar_one_or_none()
+
+        if user:
+            # User exists with this email but not linked to GitHub yet
+            # Link the GitHub account
+            user.google_id = github_id  # Reusing google_id field
+            user.oauth_provider = "github"
+            if not user.profile_picture and profile_picture:
+                user.profile_picture = profile_picture
+            user.is_verified = True
+            await db.commit()
+        else:
+            # Create new user
+            user = User(
+                email=email,
+                full_name=full_name,
+                google_id=github_id,  # Reusing google_id field
+                oauth_provider="github",
+                profile_picture=profile_picture,
+                hashed_password=None,  # No password for OAuth users
+                is_active=True,
+                is_verified=True  # GitHub accounts are pre-verified
             )
             db.add(user)
             await db.commit()
