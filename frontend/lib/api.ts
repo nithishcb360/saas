@@ -61,7 +61,7 @@ api.interceptors.response.use(
 
 // Auth API
 export const authAPI = {
-  register: (data: { email: string; password: string; full_name: string }) =>
+  register: (data: { email: string; password: string; full_name: string; company_name?: string }) =>
     api.post('/auth/register', data),
   login: (email: string, password: string) =>
     api.post('/auth/login', new URLSearchParams({ username: email, password }), {
