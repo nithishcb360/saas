@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from fastapi.responses import RedirectResponse
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timedelta
@@ -343,3 +345,151 @@ async def google_callback(
     # Redirect to frontend with tokens
     frontend_redirect = f"{settings.FRONTEND_URL}/auth/callback?access_token={access_token}&refresh_token={refresh_token}"
     return RedirectResponse(url=frontend_redirect)
+
+
+# Two-Factor Authentication Endpoints
+
+@router.post("/2fa/setup")
+async def setup_2fa(
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+):
+    from app.core.security import decode_token
+    from fastapi.security import OAuth2PasswordBearer
+
+    # Get current user from token
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    email = payload.get("sub")
+    result = await db.execute(select(User).where(User.email == email))
+    current_user = result.scalar_one_or_none()
+    if not current_user:
+        raise HTTPException(status_code=401, detail="User not found")
+    """
+    Generate a new 2FA secret and QR code for the user.
+    """
+    import pyotp
+    import qrcode
+    import io
+    import base64
+
+    # Generate a new secret
+    secret = pyotp.random_base32()
+
+    # Create provisioning URI for QR code
+    totp = pyotp.TOTP(secret)
+    provisioning_uri = totp.provisioning_uri(
+        name=current_user.email,
+        issuer_name=settings.APP_NAME
+    )
+
+    # Generate QR code
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(provisioning_uri)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    # Convert to base64
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    img_str = base64.b64encode(buffer.getvalue()).decode()
+    qr_code_data = f"data:image/png;base64,{img_str}"
+
+    # Store the secret temporarily (will be confirmed when verified)
+    current_user.two_factor_secret = secret
+    await db.commit()
+
+    return {
+        "qr_code": qr_code_data,
+        "secret": secret,
+        "message": "Scan the QR code with your authenticator app"
+    }
+
+
+@router.post("/2fa/verify")
+async def verify_2fa(
+    request_data: dict,
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+):
+    from app.core.security import decode_token
+
+    # Get current user from token
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    email = payload.get("sub")
+    result = await db.execute(select(User).where(User.email == email))
+    current_user = result.scalar_one_or_none()
+    if not current_user:
+        raise HTTPException(status_code=401, detail="User not found")
+    """
+    Verify the 2FA code and enable 2FA for the user.
+    """
+    import pyotp
+
+    verification_code = request_data.get("code", "")
+
+    if not current_user.two_factor_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="2FA setup not initiated. Please setup 2FA first."
+        )
+
+    # Verify the code
+    totp = pyotp.TOTP(current_user.two_factor_secret)
+    if not totp.verify(verification_code, valid_window=1):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid verification code"
+        )
+
+    # Enable 2FA
+    current_user.two_factor_enabled = True
+    await db.commit()
+
+    return {
+        "message": "Two-factor authentication enabled successfully",
+        "two_factor_enabled": True
+    }
+
+
+@router.post("/2fa/disable")
+async def disable_2fa(
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+):
+    from app.core.security import decode_token
+
+    # Get current user from token
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    email = payload.get("sub")
+    result = await db.execute(select(User).where(User.email == email))
+    current_user = result.scalar_one_or_none()
+    if not current_user:
+        raise HTTPException(status_code=401, detail="User not found")
+    """
+    Disable 2FA for the user.
+    """
+    if not current_user.two_factor_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Two-factor authentication is not enabled"
+        )
+
+    # Disable 2FA
+    current_user.two_factor_enabled = False
+    current_user.two_factor_secret = None
+    await db.commit()
+
+    return {
+        "message": "Two-factor authentication disabled successfully",
+        "two_factor_enabled": False
+    }

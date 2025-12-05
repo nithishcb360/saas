@@ -9,8 +9,16 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Switch } from "@/components/ui/switch"
-import { Camera, Loader2, Upload, X } from "lucide-react"
+import { Camera, Loader2, Upload, X, Smartphone, MessageSquare, Shield, CheckCircle2 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api/v1'
 
@@ -48,6 +56,14 @@ export default function SettingsPage() {
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+
+  // 2FA state
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false)
+  const [smsAuthEnabled, setSmsAuthEnabled] = useState(false)
+  const [show2FASetup, setShow2FASetup] = useState(false)
+  const [qrCode, setQrCode] = useState("")
+  const [verificationCode, setVerificationCode] = useState("")
+  const [verifying2FA, setVerifying2FA] = useState(false)
 
   // Get auth token from localStorage
   const getAuthToken = () => {
@@ -235,6 +251,146 @@ export default function SettingsPage() {
       })
     } finally {
       setUploadingImage(false)
+    }
+  }
+
+  // Enable/Disable 2FA
+  const handleToggle2FA = async (enabled: boolean) => {
+    if (enabled) {
+      // Enable 2FA - show setup dialog
+      try {
+        const token = getAuthToken()
+        const response = await fetch(`${API_BASE_URL}/auth/2fa/setup`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        })
+
+        if (response.ok) {
+          const data = await response.json()
+          setQrCode(data.qr_code)
+          setShow2FASetup(true)
+        } else {
+          throw new Error('Failed to setup 2FA')
+        }
+      } catch (error) {
+        toast({
+          title: "Error",
+          description: "Failed to setup two-factor authentication",
+          variant: "destructive",
+        })
+      }
+    } else {
+      // Disable 2FA
+      try {
+        const token = getAuthToken()
+        const response = await fetch(`${API_BASE_URL}/auth/2fa/disable`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        })
+
+        if (response.ok) {
+          setTwoFactorEnabled(false)
+          toast({
+            title: "Success",
+            description: "Two-factor authentication disabled",
+          })
+        } else {
+          throw new Error('Failed to disable 2FA')
+        }
+      } catch (error) {
+        toast({
+          title: "Error",
+          description: "Failed to disable two-factor authentication",
+          variant: "destructive",
+        })
+      }
+    }
+  }
+
+  // Verify 2FA code
+  const handleVerify2FA = async () => {
+    if (!verificationCode || verificationCode.length !== 6) {
+      toast({
+        title: "Error",
+        description: "Please enter a valid 6-digit code",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setVerifying2FA(true)
+    try {
+      const token = getAuthToken()
+      const response = await fetch(`${API_BASE_URL}/auth/2fa/verify`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          code: verificationCode,
+        }),
+      })
+
+      if (response.ok) {
+        setTwoFactorEnabled(true)
+        setShow2FASetup(false)
+        setVerificationCode("")
+        toast({
+          title: "Success",
+          description: "Two-factor authentication enabled successfully",
+        })
+      } else {
+        const error = await response.json()
+        throw new Error(error.detail || 'Invalid verification code')
+      }
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to verify code",
+        variant: "destructive",
+      })
+    } finally {
+      setVerifying2FA(false)
+    }
+  }
+
+  // Toggle SMS Authentication
+  const handleToggleSMS = async (enabled: boolean) => {
+    try {
+      const token = getAuthToken()
+      const response = await fetch(`${API_BASE_URL}/auth/sms/toggle`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          enabled: enabled,
+        }),
+      })
+
+      if (response.ok) {
+        setSmsAuthEnabled(enabled)
+        toast({
+          title: "Success",
+          description: `SMS authentication ${enabled ? 'enabled' : 'disabled'}`,
+        })
+      } else {
+        throw new Error('Failed to update SMS authentication')
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update SMS authentication",
+        variant: "destructive",
+      })
+      // Revert the switch
+      setSmsAuthEnabled(!enabled)
     }
   }
 
@@ -572,23 +728,119 @@ export default function SettingsPage() {
                 <CardDescription>Add an extra layer of security to your account</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <p className="font-medium text-foreground">Authenticator App</p>
-                    <p className="text-sm text-muted-foreground">Use an authentication app to generate codes</p>
+                <div className="flex items-center justify-between p-4 border rounded-lg bg-card">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5">
+                      <Smartphone className="h-5 w-5 text-primary" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-foreground flex items-center gap-2">
+                        Authenticator App
+                        {twoFactorEnabled && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-400 text-xs font-medium">
+                            <CheckCircle2 className="h-3 w-3" />
+                            Enabled
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Use an authentication app like Google Authenticator or Authy
+                      </p>
+                    </div>
                   </div>
-                  <Switch />
+                  <Switch
+                    checked={twoFactorEnabled}
+                    onCheckedChange={handleToggle2FA}
+                  />
                 </div>
 
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <p className="font-medium text-foreground">SMS Authentication</p>
-                    <p className="text-sm text-muted-foreground">Receive codes via SMS to your phone</p>
+                <div className="flex items-center justify-between p-4 border rounded-lg bg-card opacity-60">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5">
+                      <MessageSquare className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-foreground">SMS Authentication</p>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Receive verification codes via SMS (Coming soon)
+                      </p>
+                    </div>
                   </div>
-                  <Switch />
+                  <Switch
+                    disabled
+                    checked={smsAuthEnabled}
+                    onCheckedChange={handleToggleSMS}
+                  />
                 </div>
               </CardContent>
             </Card>
+
+            {/* 2FA Setup Dialog */}
+            <Dialog open={show2FASetup} onOpenChange={setShow2FASetup}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Shield className="h-5 w-5 text-primary" />
+                    Setup Two-Factor Authentication
+                  </DialogTitle>
+                  <DialogDescription>
+                    Scan the QR code below with your authenticator app
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-4 py-4">
+                  {/* QR Code */}
+                  {qrCode && (
+                    <div className="flex justify-center p-4 bg-white rounded-lg">
+                      <img src={qrCode} alt="2FA QR Code" className="w-48 h-48" />
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <Label htmlFor="2faCode">Verification Code</Label>
+                    <Input
+                      id="2faCode"
+                      placeholder="Enter 6-digit code"
+                      value={verificationCode}
+                      onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      maxLength={6}
+                      className="text-center text-lg tracking-widest"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Enter the 6-digit code from your authenticator app
+                    </p>
+                  </div>
+
+                  <div className="bg-muted p-3 rounded-lg text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground mb-2">Recommended apps:</p>
+                    <ul className="list-disc list-inside space-y-1">
+                      <li>Google Authenticator</li>
+                      <li>Microsoft Authenticator</li>
+                      <li>Authy</li>
+                    </ul>
+                  </div>
+                </div>
+
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShow2FASetup(false)
+                      setVerificationCode("")
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleVerify2FA}
+                    disabled={verifying2FA || verificationCode.length !== 6}
+                  >
+                    {verifying2FA && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Verify & Enable
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
           {/* Notifications Tab */}
